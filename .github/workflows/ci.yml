@@ -1,4 +1,4 @@
-name: CI (DVC pull + pytest + CML)
+name: CI (DVC + pytest + CML)
 
 on:
   push:
@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -21,37 +21,24 @@ jobs:
         with:
           python-version: "3.10"
 
-      - name: Install gcloud CLI
+      - name: Setup gcloud
         uses: google-github-actions/setup-gcloud@v2
         with:
           version: ">= 471.0.0"
 
-      # decode your base64 key into a file and export env var for libs that use ADC
-      - name: Write GCP key from base64 & export env
-        id: gcpkey
-        shell: bash
+      # Decode your base64 service-account secret into a JSON file and export env
+      - name: Auth to GCP from base64 JSON
         env:
           GCP_B64: ${{ secrets.GCP_CREDENTIALS_B64 }}
         run: |
           set -e
           KEY_FILE="${RUNNER_TEMP}/gcp-key.json"
           echo "$GCP_B64" | base64 -d > "$KEY_FILE"
-          # quick JSON sanity check
-          python - <<PY
-import json,sys,os
-json.load(open(os.environ["RUNNER_TEMP"]+"/gcp-key.json"))
-print("JSON OK")
-PY
           echo "GOOGLE_APPLICATION_CREDENTIALS=$KEY_FILE" >> "$GITHUB_ENV"
-          echo "key_file=$KEY_FILE" >> "$GITHUB_OUTPUT"
-
-      - name: gcloud auth activate-service-account
-        run: |
-          gcloud auth activate-service-account --key-file="${{ steps.gcpkey.outputs.key_file }}"
+          gcloud auth activate-service-account --key-file="$KEY_FILE"
           gcloud config set project hybrid-shine-474105-e1
-          gcloud info | sed -n '1,40p'
 
-      - name: Upgrade pip & install minimal deps
+      - name: Install CI deps
         run: |
           python -m pip install --upgrade pip wheel
           if [ -f requirements-ci.txt ]; then
@@ -60,58 +47,59 @@ PY
             pip install pytest==7.4.4 pandas==2.2.2 numpy==1.26.4 scikit-learn==1.4.2 dvc==3.51.0 dvc-gs==3.0.1
           fi
 
-      - name: Configure DVC to use this key & pull
-        shell: bash
+      - name: DVC pull (use GCP key)
         run: |
           set -e
-          echo "DVC remotes:"
+          dvc --version
+          echo "Configured remotes:"
           dvc remote list || true
-          # pick the first remote name dynamically (works whether it's gcs_remote or gcsremote)
+          # If your remote needs explicit credential file, try to set it (ignore if not supported)
           RMT=$(dvc remote list | awk '{print $1; exit}')
           if [ -n "$RMT" ]; then
-            dvc remote modify "$RMT" credentialpath "${{ steps.gcpkey.outputs.key_file }}" || true
+            dvc remote modify "$RMT" credentialpath "$GOOGLE_APPLICATION_CREDENTIALS" || true
           fi
           dvc pull -v
 
-      - name: Run tests (pytest)
+      - name: Run pytest
         id: tests
         run: |
           set -e
           mkdir -p reports
           pytest -q --maxfail=1 --disable-warnings | tee reports/pytest.txt
 
-      # install CML and comment the report
       - name: Setup CML
         uses: iterative/setup-cml@v1
 
-      - name: Post CML report
+      - name: Comment report with CML
         if: always()
         env:
           REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          cml comment create --pr --commit-sha ${{ github.sha }} <<'MD'
-          ## GA4 CI Report
+          set -e
+          echo "## GA4 CI Report" > report.md
+          echo "" >> report.md
+          echo "**Branch:** ${GITHUB_REF_NAME}" >> report.md
+          echo "" >> report.md
+          echo "### Pytest Result" >> report.md
+          if [ "${{ steps.tests.outcome }}" = "success" ]; then
+            echo "✅ All tests passed" >> report.md
+          else
+            echo "❌ Some tests failed" >> report.md
+          fi
+          echo "" >> report.md
+          echo "<details><summary>pytest log (first 200 lines)</summary>" >> report.md
+          echo "" >> report.md
+          echo '```' >> report.md
+          sed -n '1,200p' reports/pytest.txt >> report.md || echo "no report" >> report.md
+          echo '```' >> report.md
+          echo "</details>" >> report.md
 
-          **Branch:** `${{ github.ref_name }}`  
-          **Event:** `${{ github.event_name }}`
+          cml comment create --pr --file report.md
 
-          ### Result
-          ${{ steps.tests.outcome == 'success' && '✅ All tests passed' || '❌ Some tests failed' }}
-
-          <details><summary>pytest log</summary>
-
-          \`\`\`
-          $(sed -n '1,200p' reports/pytest.txt 2>/dev/null || echo "no report")
-          \`\`\`
-
-          </details>
-          MD
-
-      - name: Upload pytest log artifact
+      - name: Upload pytest log
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: pytest-log
           path: reports/pytest.txt
           if-no-files-found: ignore
-
