@@ -2,17 +2,13 @@ name: GA4 CI
 
 on:
   push:
-    branches: [ main, dev ]
+    branches: [main, dev]
   pull_request:
-    branches: [ main, dev ]
+    branches: [main]
 
 jobs:
-  test:
+  ci:
     runs-on: ubuntu-latest
-
-    permissions:
-      contents: read
-      pull-requests: write   # needed so CML can comment
 
     steps:
       - name: Checkout
@@ -21,64 +17,41 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
+          python-version: '3.10'
 
-      - name: Cache pip
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-
-      - name: Install dependencies
+      - name: Install deps (pip + DVC + pytest)
         run: |
           python -m pip install --upgrade pip
-          # Your repo deps (edit requirements.txt as needed)
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          # GA4 needs these explicitly
-          pip install "dvc[gs]==3.50.2" pytest
-          # CML for PR comment
-          pip install iterative-telemetry >/dev/null 2>&1 || true
-      - name: Set up CML
-        uses: iterative/setup-cml@v2
+          pip install -r requirements.txt || true
+          pip install dvc dvc-gs pytest
 
-      - name: Configure GCP credentials for DVC / GCS
+      # Optional: authenticate to GCS if your DVC remote is on GCS
+      - name: Configure GCS creds for DVC (optional)
+        if: ${{ secrets.GCP_SA_KEY_JSON != '' }}
         env:
-          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+          GCP_SA_KEY_JSON: ${{ secrets.GCP_SA_KEY_JSON }}
         run: |
-          echo "$GCP_SA_KEY" > gcp-key.json
-          echo "GOOGLE_APPLICATION_CREDENTIALS=$GITHUB_WORKSPACE/gcp-key.json" >> $GITHUB_ENV
-          # Also let gsutils/libs see the creds
-          echo "GOOGLE_CLOUD_PROJECT=$(python - <<'PY'
-import json,sys
-print(json.load(open('gcp-key.json'))['project_id'])
-PY
-)" >> $GITHUB_ENV
+          echo "$GCP_SA_KEY_JSON" > sa.json
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$PWD/sa.json" >> $GITHUB_ENV
 
-      - name: DVC pull (fetch data & model from GCS)
-        run: |
-          # Needed if your dvc remote lives in .dvc/config
-          dvc pull -v
+      - name: DVC pull
+        run: dvc pull -v
 
-      - name: Run tests
-        run: |
-          set -e
-          # JUnit XML for artifacts; plain text for the report
-          pytest -q --disable-warnings --maxfail=1 | tee pytest.out
-          # Minimal markdown summary for CML comment
-          echo "## ✅ GA4 CI Test Report" > report.md
-          echo "" >> report.md
-          echo "**Branch:** \`${{ github.ref_name }}\`" >> report.md
-          echo "" >> report.md
-          echo "### Pytest Output (truncated)" >> report.md
-          echo '```' >> report.md
-          tail -n 200 pytest.out >> report.md
-          echo '```' >> report.md
+      - name: Run tests (pytest)
+        run: pytest -q
 
-      - name: Post CML comment
+      - name: Post CML report as PR comment
         if: ${{ github.event_name == 'pull_request' }}
         env:
           REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          cml comment report.md
+          echo "## GA4 CI Report" > report.md
+          echo "" >> report.md
+          echo "- Branch: $GITHUB_REF_NAME" >> report.md
+          echo "- Commit: $GITHUB_SHA" >> report.md
+          echo "" >> report.md
+          echo "### Pytest summary" >> report.md
+          pytest -q || true
+          echo "" >> report.md
+          npx -y @dvcorg/cml@latest comment create --pr report.md
+
