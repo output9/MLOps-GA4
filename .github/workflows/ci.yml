@@ -1,86 +1,93 @@
-name: GA4 CI
+name: CI (DVC pull + tests + CML)
 
 on:
   push:
-    branches: [dev, main]
+    branches: [ "dev", "main" ]
   pull_request:
-    branches: [dev, main]
+    branches: [ "main" ]
 
 jobs:
   ci:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout repo
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Set up Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: "3.10"
 
-      # Install gcloud CLI (no auth yet; we authenticate in the next step)
+      # Authenticate to Google Cloud using the RAW JSON secret
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY_JSON }}
+
       - name: Install gcloud CLI
         uses: google-github-actions/setup-gcloud@v2
         with:
-          project_id: hybrid-shine-474105-e1
-          # We are not passing service_account_key here because we’ll auth manually in the next step
+          version: ">= 471.0.0"
 
-      # >>> Your requested auth block <<<
-      - name: Authenticate to GCP
+      - name: Set GCP project
         run: |
-          echo "${{ secrets.GCP_SA_KEY_B64 }}" | base64 --decode > gcp-key.json
-          gcloud auth activate-service-account --key-file=gcp-key.json
-          gcloud config set project hybrid-shine-474105-e1
-          echo "GOOGLE_APPLICATION_CREDENTIALS=$PWD/gcp-key.json" >> $GITHUB_ENV
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then
-            pip install -r requirements.txt
-          else
-            # Minimal fallback if requirements.txt is not present
-            pip install pytest cml
-            # DVC + GCS plugin (modern split)
-            pip install dvc dvc-gs
-          fi
+          gcloud config set project "${{ secrets.GCP_PROJECT || 'hybrid-shine-474105-e1' }}"
+          gcloud info
 
-      - name: DVC pull artifacts
+      - name: Upgrade pip and install deps
         run: |
-          # Ensure git is aware of DVC if repo uses it
-          dvc version
+          python -m pip install --upgrade pip wheel
+          pip install -r requirements-ci.txt
+
+      - name: DVC pull data & models from GCS
+        run: |
           dvc pull -v
 
       - name: Run tests (pytest)
+        id: tests
         run: |
           set -e
           mkdir -p reports
           pytest -q --maxfail=1 --disable-warnings | tee reports/pytest.txt
+          echo "ok=true" >> $GITHUB_OUTPUT
 
-      - name: Prepare CML report
-        run: |
-          echo "## GA4 CI Report" > report.md
-          echo "" >> report.md
-          echo "**Workflow run:** $GITHUB_WORKFLOW" >> report.md
-          echo "**Branch/PR:** $GITHUB_REF" >> report.md
-          echo "" >> report.md
-          echo "### PyTest Output" >> report.md
-          echo '```' >> report.md
-          cat reports/pytest.txt >> report.md
-          echo '```' >> report.md
-          echo "" >> report.md
-          echo "### DVC Status" >> report.md
-          echo '```' >> report.md
-          dvc status -v || true >> report.md
-          echo '```' >> report.md
-
-      - name: Post CML comment
-        uses: iterative/setup-cml@v2
-      - name: Create PR/Run comment
+      # Post a PR/commit comment with the test report using CML action
+      - name: Publish CML report comment
+        if: always()
+        uses: dvcorg/cml@v0.12.0
         env:
           REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          cml comment create --pr --publish report.md || \
-          cml comment create report.md
+        with:
+          args: |
+            cml comment create --pr --commit-sha ${{ github.sha }} <<'MD'
+            ## GA4 CI Report
 
+            **Branch:** ${{ github.ref_name }}  
+            **Workflow:** ${{ github.workflow }}  
+            **Event:** ${{ github.event_name }}
+
+            ### Pytest Output
+            ```
+            ${{ steps.tests.outcome == 'success' && 'All tests passed ✅' || 'Some tests failed ❌' }}
+            ```
+
+            <details><summary>Raw pytest log</summary>
+
+            ```
+            ${{ hashFiles('reports/pytest.txt') != '' && github.workspace && 'See attached artifact below' || 'No report found' }}
+            ```
+
+            </details>
+            MD
+
+      - name: Upload pytest log artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-log
+          path: reports/pytest.txt
+          if-no-files-found: ignore
 
