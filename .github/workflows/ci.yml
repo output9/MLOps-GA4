@@ -1,71 +1,45 @@
-name: GA4 CI
-
-on:
-  push:
-    branches: [main, dev]
-  pull_request:
-    branches: [main]
-
-permissions:
-  contents: read
-  pull-requests: write
-
-jobs:
-  ci:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-
-      - name: Install base deps (pin to avoid build failures)
-        run: |
-          python -m pip install --upgrade pip
-          pip install \
-            "dvc[gcs]==3.59.0" \
-            "pytest==7.4.4" \
-            "pandas==2.1.4" \
-            "numpy==1.26.4" \
-            "scikit-learn==1.3.2" \
-            "joblib==1.3.2"
-          if [ -f requirements.txt ]; then pip install -r requirements.txt || true; fi
-
-      # ===== AUTH USING YOUR BASE64 SECRET =====
-      - name: Write GCP key from BASE64 secret
+# --- Auth + gcloud (robust, no manual json files kept) ---
+      - name: Decode base64 service account JSON
+        id: gcp_key
+        shell: bash
         env:
           GCP_CREDENTIALS_B64: ${{ secrets.GCP_CREDENTIALS_B64 }}
-        shell: bash
         run: |
           set -e
+          # Decode to a temp file AND also expose the JSON as a step output
           KEY_FILE="${RUNNER_TEMP}/gcp-key.json"
           echo "$GCP_CREDENTIALS_B64" | base64 --decode > "$KEY_FILE"
-          # sanity check JSON
-          python -c "import json,sys; json.load(open('$KEY_FILE'))"
-          echo "GOOGLE_APPLICATION_CREDENTIALS=$KEY_FILE" >> "$GITHUB_ENV"
+          python - <<'PY'
+import json, os, sys
+p = os.environ["RUNNER_TEMP"] + "/gcp-key.json"
+json.load(open(p))  # sanity check
+print("JSON OK")
+PY
+          {
+            echo "json<<EOF"
+            cat "$KEY_FILE"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
-      - name: Install gcloud CLI
-        run: |
-          echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] http://packages.cloud.google.com/apt cloud-sdk main" | sudo tee -a /etc/apt/sources.list.d/google-cloud-sdk.list
-          curl -s https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo tee /usr/share/keyrings/cloud.google.gpg >/dev/null
-          sudo apt-get update -y && sudo apt-get install -y google-cloud-cli
+      - name: Authenticate to GCP (google-github-actions/auth)
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ steps.gcp_key.outputs.json }}
 
-      - name: Authenticate gcloud
+      - name: Setup gcloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Verify gcloud auth & set project
         run: |
-          gcloud auth activate-service-account --key-file "$GOOGLE_APPLICATION_CREDENTIALS"
-          # OPTIONAL: set project if needed (replace with your project ID)
-          gcloud config set project hybrid-shine-474105-e1
           gcloud auth list
+          gcloud config set project hybrid-shine-474105-e1
 
-      # ===== DVC PULL =====
+# --- DVC pull ---
       - name: DVC pull
-        run: dvc pull -v
+        run: |
+          dvc pull -v
 
-      # ===== TESTS =====
+# --- Pytest & report file ---
       - name: Run pytest
         run: |
           set -e
@@ -76,7 +50,7 @@ jobs:
           tail -n 200 pytest.log >> report.md || true
           echo '```' >> report.md
 
-      # ===== CML COMMENT (v2) =====
+# --- CML (v2) comment; needs a body string ---
       - name: Setup CML
         uses: iterative/setup-cml@v2
 
@@ -86,5 +60,8 @@ jobs:
           REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           BODY="$(cat report.md)"
-          cml comment create --pr "$BODY"
+          # Make sure BODY is not empty
+          if [ -z "$BODY" ]; then BODY="(no pytest output captured)"; fi
+          # Pin to the PR head SHA to avoid “not enough arguments”
+          cml comment create --pr --commit-sha "${{ github.event.pull_request.head.sha }}" "$BODY"
 
