@@ -1,63 +1,88 @@
-# .github/workflows/ci.yml
-name: CI
+name: GA4 CI
 
 on:
   push:
-    branches: [main, dev]
+    branches: [dev, main]
   pull_request:
-    branches: [main]
-
-permissions:
-  contents: read
-  pull-requests: write
+    branches: [dev, main]
 
 jobs:
-  test:
+  ci:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
+          python-version: '3.10'
+
+      # Install gcloud CLI (no auth yet; we authenticate in the next step)
+      - name: Install gcloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: hybrid-shine-474105-e1
+          # We are not passing service_account_key here because we’ll auth manually in the next step
+
+      # >>> Your requested auth block <<<
+      - name: Authenticate to GCP
+        shell: bash
+        run: |
+          KEY_FILE="${RUNNER_TEMP}/gcp-key.json"
+          printf '%s' "${{ secrets.GCP_SA_KEY }}" > "$KEY_FILE"
+          gcloud auth activate-service-account --key-file="$KEY_FILE"
+          gcloud config set project hybrid-shine-474105-e1
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$KEY_FILE" >> "$GITHUB_ENV"
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pytest dvc dvc-gs
-
-      - name: Check GCP_SA_KEY secret
-        run: |
-          if [ -z "${{ secrets.GCP_SA_KEY }}" ]; then
-            echo "::error::GCP_SA_KEY secret is missing. Add it in GitHub → Settings → Secrets and variables → Actions."
-            exit 1
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          else
+            # Minimal fallback if requirements.txt is not present
+            pip install pytest cml
+            # DVC + GCS plugin (modern split)
+            pip install dvc dvc-gs
           fi
 
-      - name: Write GCP credentials & export env
-        run: |
-          echo "${{ secrets.GCP_SA_KEY }}" | base64 -d > $HOME/gcp-key.json
-          echo "GOOGLE_APPLICATION_CREDENTIALS=$HOME/gcp-key.json" >> $GITHUB_ENV
-
       - name: DVC pull artifacts
-        run: dvc pull -v
+        run: |
+          # Ensure git is aware of DVC if repo uses it
+          dvc version
+          dvc pull -v
 
-      - name: Run tests
-        run: pytest -q --disable-warnings --maxfail=1
+      - name: Run tests (pytest)
+        run: |
+          set -e
+          mkdir -p reports
+          pytest -q --maxfail=1 --disable-warnings | tee reports/pytest.txt
+
+      - name: Prepare CML report
+        run: |
+          echo "## GA4 CI Report" > report.md
+          echo "" >> report.md
+          echo "**Workflow run:** $GITHUB_WORKFLOW" >> report.md
+          echo "**Branch/PR:** $GITHUB_REF" >> report.md
+          echo "" >> report.md
+          echo "### PyTest Output" >> report.md
+          echo '```' >> report.md
+          cat reports/pytest.txt >> report.md
+          echo '```' >> report.md
+          echo "" >> report.md
+          echo "### DVC Status" >> report.md
+          echo '```' >> report.md
+          dvc status -v || true >> report.md
+          echo '```' >> report.md
 
       - name: Post CML comment
-        if: ${{ github.event_name == 'pull_request' }}
+        uses: iterative/setup-cml@v2
+      - name: Create PR/Run comment
         env:
           REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          pytest -q --disable-warnings --maxfail=1 --junitxml=report.xml || true
-          echo "## GA4 CI Report" > report.md
-          echo "" >> report.md
-          echo "\`\`\`xml" >> report.md
-          cat report.xml >> report.md
-          echo "\`\`\`" >> report.md
-          npx -y @dvcorg/cml@latest comment create --pr --commit-sha=${{ github.sha }} report.md
+          cml comment create --pr --publish report.md || \
+          cml comment create report.md
 
