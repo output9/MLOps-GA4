@@ -1,0 +1,13 @@
+md5: 7de317ecc6d9ec64c1435cfb4c3288e1
+frozen: true
+deps:
+- etag: 08fe8fd485a9b090031001
+  size: 3861
+  version_id: '1760878889601022'
+  hash: md5
+  path: gs://mlops-course-hybrid-shine-474105-e1-unique/data/iris.csv
+outs:
+- md5: 9c22f7cf3714d0c194f5f43a6276ca9d
+  size: 3861
+  hash: md5
+  path: iris.csv
