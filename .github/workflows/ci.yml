@@ -50,8 +50,10 @@ jobs:
 
       - name: Comment report with CML
         uses: iterative/setup-cml@v2
+      - name: Create CML comment
         env:
           REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
           echo "✅ Tests completed successfully!" > report.md
           cml comment create report.md
 
