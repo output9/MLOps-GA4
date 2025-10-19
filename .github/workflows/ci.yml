@@ -1,62 +1,63 @@
+# .github/workflows/ci.yml
 name: CI
 
 on:
   push:
-    branches: [dev, main]
+    branches: [main, dev]
   pull_request:
-    branches: [dev, main]
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
 
 jobs:
-  ci:
+  test:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-      pull-requests: write
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: "3.10"
 
-      - name: Install deps
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install dvc dvc-gs pytest joblib scikit-learn numpy pandas cml
+          pip install -r requirements.txt
+          pip install pytest dvc dvc-gs
 
-      # If your DVC remote is on GCS, add your service account JSON as a repo secret GCP_SA_KEY
-      - name: Auth to GCP (for DVC on GCS)
-        if: ${{ secrets.GCP_SA_KEY != '' }}
-        env:
-          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+      - name: Check GCP_SA_KEY secret
         run: |
-          echo "$GCP_SA_KEY" > gcp-key.json
-          echo "GOOGLE_APPLICATION_CREDENTIALS=$PWD/gcp-key.json" >> $GITHUB_ENV
+          if [ -z "${{ secrets.GCP_SA_KEY }}" ]; then
+            echo "::error::GCP_SA_KEY secret is missing. Add it in GitHub → Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+
+      - name: Write GCP credentials & export env
+        run: |
+          echo "${{ secrets.GCP_SA_KEY }}" | base64 -d > $HOME/gcp-key.json
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$HOME/gcp-key.json" >> $GITHUB_ENV
 
       - name: DVC pull artifacts
         run: dvc pull -v
 
       - name: Run tests
-        run: pytest -q
+        run: pytest -q --disable-warnings --maxfail=1
 
-      - name: Build CI report
-        run: |
-          echo "## GA4 CI Report" > report.md
-          echo "" >> report.md
-          echo "✅ DVC pull & tests ran on \`${{ github.ref_name }}\`" >> report.md
-          echo "" >> report.md
-          echo "### Pytest summary" >> report.md
-          echo '```' >> report.md
-          pytest -q || true
-          echo '```' >> report.md
-
-      - name: Comment on PR with CML
+      - name: Post CML comment
         if: ${{ github.event_name == 'pull_request' }}
         env:
           REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npx cml comment report.md
+        run: |
+          pytest -q --disable-warnings --maxfail=1 --junitxml=report.xml || true
+          echo "## GA4 CI Report" > report.md
+          echo "" >> report.md
+          echo "\`\`\`xml" >> report.md
+          cat report.xml >> report.md
+          echo "\`\`\`" >> report.md
+          npx -y @dvcorg/cml@latest comment create --pr --commit-sha=${{ github.sha }} report.md
 
