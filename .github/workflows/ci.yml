@@ -1,67 +1,58 @@
-# --- Auth + gcloud (robust, no manual json files kept) ---
-      - name: Decode base64 service account JSON
-        id: gcp_key
-        shell: bash
-        env:
-          GCP_CREDENTIALS_B64: ${{ secrets.GCP_CREDENTIALS_B64 }}
-        run: |
-          set -e
-          # Decode to a temp file AND also expose the JSON as a step output
-          KEY_FILE="${RUNNER_TEMP}/gcp-key.json"
-          echo "$GCP_CREDENTIALS_B64" | base64 --decode > "$KEY_FILE"
-          python - <<'PY'
-import json, os, sys
-p = os.environ["RUNNER_TEMP"] + "/gcp-key.json"
-json.load(open(p))  # sanity check
-print("JSON OK")
-PY
-          {
-            echo "json<<EOF"
-            cat "$KEY_FILE"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
+name: CI
 
-      - name: Authenticate to GCP (google-github-actions/auth)
+on:
+  pull_request:
+  push:
+    branches:
+      - dev
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          python -m venv .venv
+          source .venv/bin/activate
+          pip install --upgrade pip
+          pip install -r requirements.txt || true
+          pip install pytest dvc[gs] google-cloud-storage
+
+      - name: Authenticate to GCP
         uses: google-github-actions/auth@v2
         with:
-          credentials_json: ${{ steps.gcp_key.outputs.json }}
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-      - name: Setup gcloud CLI
-        uses: google-github-actions/setup-gcloud@v2
-
-      - name: Verify gcloud auth & set project
+      - name: Configure gcloud
         run: |
-          gcloud auth list
           gcloud config set project hybrid-shine-474105-e1
+          gcloud auth list
 
-# --- DVC pull ---
-      - name: DVC pull
+      - name: DVC Pull
         run: |
+          source .venv/bin/activate
           dvc pull -v
 
-# --- Pytest & report file ---
-      - name: Run pytest
+      - name: Run tests
         run: |
-          set -e
-          pytest -q --maxfail=1 --disable-warnings | tee pytest.log
-          echo "## ✅ Pytest summary" > report.md
-          echo "" >> report.md
-          echo '```' >> report.md
-          tail -n 200 pytest.log >> report.md || true
-          echo '```' >> report.md
-
-# --- CML (v2) comment; needs a body string ---
-      - name: Setup CML
-        uses: iterative/setup-cml@v2
+          source .venv/bin/activate
+          pytest -v
 
       - name: Comment report with CML
-        if: ${{ always() && github.event_name == 'pull_request' }}
+        uses: iterative/setup-cml@v2
         env:
           REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          BODY="$(cat report.md)"
-          # Make sure BODY is not empty
-          if [ -z "$BODY" ]; then BODY="(no pytest output captured)"; fi
-          # Pin to the PR head SHA to avoid “not enough arguments”
-          cml comment create --pr --commit-sha "${{ github.event.pull_request.head.sha }}" "$BODY"
+          echo "✅ Tests completed successfully!" > report.md
+          cml comment create report.md
 
