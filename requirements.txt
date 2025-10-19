@@ -1,0 +1,9 @@
+pytest
+pandas
+scikit-learn
+joblib
+dvc[gs]==3.50.2
+pytest
+cml
+dvc
+dvc-gs

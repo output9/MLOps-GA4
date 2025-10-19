@@ -1,0 +1,13 @@
+md5: a18a64fd3c56c3395fb4b43e982f7889
+frozen: true
+deps:
+- etag: 088daef5afcb8c90031001
+  size: 2561
+  version_id: '1759651154450189'
+  hash: md5
+  path: gs://mlops-course-hybrid-shine-474105-e1-unique/artifacts/model.joblib
+outs:
+- md5: 370018d293135ce1ffe615056d0ca74e
+  size: 2561
+  hash: md5
+  path: model.joblib

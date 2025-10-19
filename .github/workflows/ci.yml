@@ -1,21 +1,20 @@
-name: GA4 CI
+
+
+name: CI
 
 on:
-  push:
-    branches: [ main, dev ]
   pull_request:
-    branches: [ main, dev ]
+  push:
+    branches:
+      - dev
+      - main
 
 jobs:
-  test:
+  build:
     runs-on: ubuntu-latest
 
-    permissions:
-      contents: read
-      pull-requests: write   # needed so CML can comment
-
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Set up Python
@@ -23,62 +22,31 @@ jobs:
         with:
           python-version: "3.10"
 
-      - name: Cache pip
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          # Your repo deps (edit requirements.txt as needed)
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          # GA4 needs these explicitly
-          pip install "dvc[gs]==3.50.2" pytest
-          # CML for PR comment
-          pip install iterative-telemetry >/dev/null 2>&1 || true
-      - name: Set up CML
-        uses: iterative/setup-cml@v2
+          python -m venv .venv
+          source .venv/bin/activate
+          pip install --upgrade pip
+          pip install -r requirements.txt || true
+          pip install pytest dvc[gs] google-cloud-storage
 
-      - name: Configure GCP credentials for DVC / GCS
-        env:
-          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
-        run: |
-          echo "$GCP_SA_KEY" > gcp-key.json
-          echo "GOOGLE_APPLICATION_CREDENTIALS=$GITHUB_WORKSPACE/gcp-key.json" >> $GITHUB_ENV
-          # Also let gsutils/libs see the creds
-          echo "GOOGLE_CLOUD_PROJECT=$(python - <<'PY'
-import json,sys
-print(json.load(open('gcp-key.json'))['project_id'])
-PY
-)" >> $GITHUB_ENV
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-      - name: DVC pull (fetch data & model from GCS)
+      - name: Configure gcloud
         run: |
-          # Needed if your dvc remote lives in .dvc/config
+          gcloud config set project hybrid-shine-474105-e1
+          gcloud auth list
+
+      - name: DVC Pull
+        run: |
+          source .venv/bin/activate
           dvc pull -v
 
-      - name: Run tests
-        run: |
-          set -e
-          # JUnit XML for artifacts; plain text for the report
-          pytest -q --disable-warnings --maxfail=1 | tee pytest.out
-          # Minimal markdown summary for CML comment
-          echo "## ✅ GA4 CI Test Report" > report.md
-          echo "" >> report.md
-          echo "**Branch:** \`${{ github.ref_name }}\`" >> report.md
-          echo "" >> report.md
-          echo "### Pytest Output (truncated)" >> report.md
-          echo '```' >> report.md
-          tail -n 200 pytest.out >> report.md
-          echo '```' >> report.md
+    - name: Run tests
+      run: |
+        export PYTHONPATH=$PYTHONPATH:$(pwd)
+        pytest -v
 
-      - name: Post CML comment
-        if: ${{ github.event_name == 'pull_request' }}
-        env:
-          REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          cml comment report.md
