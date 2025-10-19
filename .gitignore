@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.env
+
+# DVC local cache (remote artifacts are in GCS)
+.dvc/tmp/
+.dvc/cache/
+
+# Models & datasets (don’t commit binaries or standard data)
+*.joblib
+*.pkl
+*.parquet
+*.csv
+*.npy
+
+# Notebooks checkpoints
+.ipynb_checkpoints/
+
+# OS noise
+.DS_Store
