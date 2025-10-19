@@ -76,25 +76,10 @@ jobs:
           REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -e
-          echo "## GA4 CI Report" > report.md
-          echo "" >> report.md
-          echo "**Branch:** ${GITHUB_REF_NAME}" >> report.md
-          echo "" >> report.md
-          echo "### Pytest Result" >> report.md
-          if [ "${{ steps.tests.outcome }}" = "success" ]; then
-            echo "✅ All tests passed" >> report.md
-          else
-            echo "❌ Some tests failed" >> report.md
-          fi
-          echo "" >> report.md
-          echo "<details><summary>pytest log (first 200 lines)</summary>" >> report.md
-          echo "" >> report.md
-          echo '```' >> report.md
-          sed -n '1,200p' reports/pytest.txt >> report.md || echo "no report" >> report.md
-          echo '```' >> report.md
-          echo "</details>" >> report.md
+          # send the report *content* as the single positional arg
+          BODY="$(cat report.md)"
+          cml comment create --pr "$BODY"
 
-          cml comment create --pr --file report.md
 
       - name: Upload pytest log
         if: always()
