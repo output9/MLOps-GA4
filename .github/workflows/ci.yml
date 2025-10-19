@@ -28,14 +28,11 @@ jobs:
 
       # >>> Your requested auth block <<<
       - name: Authenticate to GCP
-        shell: bash
         run: |
-          KEY_FILE="${RUNNER_TEMP}/gcp-key.json"
-          printf '%s' "${{ secrets.GCP_SA_KEY }}" > "$KEY_FILE"
-          gcloud auth activate-service-account --key-file="$KEY_FILE"
+          echo "${{ secrets.GCP_SA_KEY_B64 }}" | base64 --decode > gcp-key.json
+          gcloud auth activate-service-account --key-file=gcp-key.json
           gcloud config set project hybrid-shine-474105-e1
-          echo "GOOGLE_APPLICATION_CREDENTIALS=$KEY_FILE" >> "$GITHUB_ENV"
-
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$PWD/gcp-key.json" >> $GITHUB_ENV
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -85,4 +82,5 @@ jobs:
         run: |
           cml comment create --pr --publish report.md || \
           cml comment create report.md
+
 
