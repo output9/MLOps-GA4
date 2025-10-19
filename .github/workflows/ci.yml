@@ -1,3 +1,4 @@
+
 name: CI
 
 on:
@@ -46,6 +47,7 @@ jobs:
       - name: Run tests
         run: |
           source .venv/bin/activate
+          echo "PYTHONPATH=$PWD" >> $GITHUB_ENV
           pytest -v
 
       - name: Comment report with CML
@@ -56,4 +58,5 @@ jobs:
         run: |
           echo "✅ Tests completed successfully!" > report.md
           cml comment create report.md
+
 
