@@ -1,0 +1,14 @@
+aliases: []
+creation_timestamp: 1761838811936
+current_stage: None
+description: null
+last_updated_timestamp: 1761838811936
+name: iris_classifier
+run_id: 79371bd50773481b9d3393bb25adbaca
+run_link: null
+source: file:///home/jupyter/GA4_CI/mlruns/965910500514280905/79371bd50773481b9d3393bb25adbaca/artifacts/model
+status: READY
+status_message: null
+storage_location: file:///home/jupyter/GA4_CI/mlruns/965910500514280905/79371bd50773481b9d3393bb25adbaca/artifacts/model
+user_id: null
+version: 2

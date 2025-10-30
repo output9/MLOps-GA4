@@ -1,0 +1,6 @@
+artifact_location: file:///home/jupyter/GA4_CI/mlruns/965910500514280905
+creation_time: 1761837949919
+experiment_id: '965910500514280905'
+last_update_time: 1761837949919
+lifecycle_stage: active
+name: iris-ga5
