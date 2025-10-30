@@ -1,0 +1,9 @@
+{
+  "acc": 0.9473684210526315,
+  "run_id": "b049681233b3400c8c87ef05976c239e",
+  "params": {
+    "clf__C": 2.0,
+    "clf__penalty": "l2",
+    "clf__solver": "lbfgs"
+  }
+}

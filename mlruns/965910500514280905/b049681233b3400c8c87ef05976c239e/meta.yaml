@@ -1,0 +1,15 @@
+artifact_uri: file:///home/jupyter/GA4_CI/mlruns/965910500514280905/b049681233b3400c8c87ef05976c239e/artifacts
+end_time: 1761838815079
+entry_point_name: ''
+experiment_id: '965910500514280905'
+lifecycle_stage: active
+run_id: b049681233b3400c8c87ef05976c239e
+run_name: thundering-mule-865
+run_uuid: b049681233b3400c8c87ef05976c239e
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1761838811969
+status: 3
+tags: []
+user_id: jupyter
