@@ -27,7 +27,7 @@ jobs:
 
       # ✅ Fixed: explicitly specify Dockerfile path in root
       - name: Build Docker image
-        run: docker build -f ./Dockerfile -t us-central1-docker.pkg.dev/hybrid-shine-474105-e1/iris-api-repo/iris-api:latest .
+        run: docker build -t us-central1-docker.pkg.dev/hybrid-shine-474105-e1/iris-api-repo/iris-api:latest . --file Dockerfile --build-context api=./api
 
       - name: Push Docker image to Artifact Registry
         run: docker push us-central1-docker.pkg.dev/hybrid-shine-474105-e1/iris-api-repo/iris-api:latest
