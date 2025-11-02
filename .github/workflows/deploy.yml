@@ -1,52 +1,41 @@
-name: CI-CD to GKE
+name: Deploy to GKE
 
 on:
   push:
-    branches: [main, ga6-cd]
+    branches:
+      - ga6-cd
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ✅ Authenticate gcloud using your SA JSON in secrets.GCP_SA_KEY
       - name: Auth to GCP
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-      # ✅ Install gcloud SDK (no creds here)
-      - name: Setup gcloud
+      - name: Setup gcloud SDK
         uses: google-github-actions/setup-gcloud@v2
         with:
-          project_id: ${{ secrets.GCP_PROJECT_ID }}
+          project_id: hybrid-shine-474105-e1
 
-      # ✅ Docker auth for Artifact Registry
-      - name: Configure Docker for Artifact Registry
+      - name: Configure Docker
         run: gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
 
-      # Build & Push image
-      - name: Build image
-        run: |
-          docker build -t us-central1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/iris-api-repo/iris-api:latest .
-      - name: Push image
-        run: |
-          docker push us-central1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/iris-api-repo/iris-api:latest
+      - name: Build Docker image
+        run: docker build -t us-central1-docker.pkg.dev/hybrid-shine-474105-e1/iris-api-repo/iris-api:latest .
 
-      # ✅ Fetch GKE creds
-      - name: Get GKE credentials
-        uses: google-github-actions/get-gke-credentials@v1
-        with:
-          cluster_name: ${{ secrets.GKE_CLUSTER }}
-          location: ${{ secrets.GKE_REGION }}
-          project_id: ${{ secrets.GCP_PROJECT_ID }}
+      - name: Push Docker image
+        run: docker push us-central1-docker.pkg.dev/hybrid-shine-474105-e1/iris-api-repo/iris-api:latest
 
-      # Deploy
+      - name: Set up GKE credentials
+        run: gcloud container clusters get-credentials iris-cluster --region us-central1 --project hybrid-shine-474105-e1
+
       - name: Deploy to GKE
         run: |
           kubectl apply -f k8s/deploy.yaml
-          kubectl rollout status deployment/iris-api --timeout=120s
+          kubectl rollout status deployment/iris-api
 
