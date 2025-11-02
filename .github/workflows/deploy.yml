@@ -1,4 +1,4 @@
-name: Deploy to Cloud Run
+name: Deploy to GKE
 
 on:
   push:
@@ -13,31 +13,30 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # ✅ Keep your working auth step
       - name: Auth to GCP
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_CREDENTIALS }}
           create_credentials_file: true
           export_environment_variables: true
-       
 
       - name: Configure Docker for Artifact Registry
         run: gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
 
-      # ✅ Fixed: explicitly specify Dockerfile path in root
       - name: Build Docker image
         env:
           PROJECT_ID: hybrid-shine-474105-e1
         run: docker build -f ./Dockerfile -t us-central1-docker.pkg.dev/${PROJECT_ID}/iris-api-repo/iris-api:latest .
+
       - name: Push Docker image to Artifact Registry
         run: docker push us-central1-docker.pkg.dev/hybrid-shine-474105-e1/iris-api-repo/iris-api:latest
 
-      - name: Deploy to Cloud Run
+      - name: Set up GKE credentials
+        run: gcloud container clusters get-credentials iris-cluster --region us-central1 --project hybrid-shine-474105-e1
+
+      - name: Deploy to GKE
         run: |
-          gcloud run deploy iris-api \
-            --image us-central1-docker.pkg.dev/hybrid-shine-474105-e1/iris-api-repo/iris-api:latest \
-            --region us-central1 \
-            --platform managed \
-            --allow-unauthenticated
+          kubectl apply -f k8s/deployment.yaml
+          kubectl apply -f k8s/service.yaml
+          kubectl rollout status deployment/iris-api --timeout=120s
 
