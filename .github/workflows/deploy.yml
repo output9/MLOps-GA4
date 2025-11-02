@@ -13,16 +13,20 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v1
+      # ✅ Keep your working auth step
+      - name: Auth to GCP
+        uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+          export_environment_variables: true
 
       - name: Configure Docker for Artifact Registry
         run: gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
 
+      # ✅ Fixed: explicitly specify Dockerfile path in root
       - name: Build Docker image
-        run: docker build -t us-central1-docker.pkg.dev/hybrid-shine-474105-e1/iris-api-repo/iris-api:latest .
+        run: docker build -f ./Dockerfile -t us-central1-docker.pkg.dev/hybrid-shine-474105-e1/iris-api-repo/iris-api:latest .
 
       - name: Push Docker image to Artifact Registry
         run: docker push us-central1-docker.pkg.dev/hybrid-shine-474105-e1/iris-api-repo/iris-api:latest
