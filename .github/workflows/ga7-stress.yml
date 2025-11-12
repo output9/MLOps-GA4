@@ -10,48 +10,56 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout repo
         uses: actions/checkout@v3
 
       - name: Setup kubectl
         uses: azure/setup-kubectl@v3
         with:
-          version: 'latest'
+          version: "latest"
 
-      - name: Configure kubeconfig from secret
+      - name: Configure kubeconfig from base64 secret
         env:
-          KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
+          KUBE_CONFIG_B64: ${{ secrets.KUBE_CONFIG_B64 }}
         run: |
-          echo "$KUBE_CONFIG" > kubeconfig.yaml
+          echo "$KUBE_CONFIG_B64" | base64 --decode > kubeconfig.yaml
           echo "KUBECONFIG=$PWD/kubeconfig.yaml" >> $GITHUB_ENV
+          echo "✅ Kubeconfig written and configured"
 
-      - name: kubectl client ping
+      - name: Verify cluster connection
         run: |
           kubectl version --client=true
+          echo "Cluster nodes:"
           kubectl get nodes
 
-      # (Re)apply your manifests to be safe
-      - name: Apply manifests (deploy & svc)
+      - name: Apply manifests (deploy + service)
         run: |
+          echo "🛠 Applying Kubernetes manifests..."
           kubectl apply -f k8s/deploy.yaml
           kubectl rollout status deploy/iris-api --timeout=120s
           kubectl get svc iris-api-svc
 
-      # Create/Update HPA to 1..3 pods @ 50% CPU
-      - name: Configure HPA (1..3 @ 50% CPU)
+      - name: Configure Horizontal Pod Autoscaler (1–3 pods @ 50% CPU)
         run: |
           kubectl autoscale deployment iris-api --cpu-percent=50 --min=1 --max=3 || true
+          echo "HPA configuration complete."
           kubectl get hpa
 
-      # Discover the current external IP of the LB
       - name: Get External IP
         id: svc
         run: |
-          IP=$(kubectl get svc iris-api-svc -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-          echo "EXTERNAL_IP=$IP" >> $GITHUB_ENV
-          echo "External IP: $IP"
+          echo "Fetching external IP for iris-api-svc..."
+          for i in {1..10}; do
+            IP=$(kubectl get svc iris-api-svc -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+            if [ -n "$IP" ]; then
+              echo "External IP: $IP"
+              echo "EXTERNAL_IP=$IP" >> $GITHUB_ENV
+              break
+            fi
+            echo "Waiting for external IP..."
+            sleep 10
+          done
 
-      # Install wrk and run POST load test
       - name: Run wrk stress test (POST /predict)
         run: |
           sudo apt-get update && sudo apt-get install -y wrk
@@ -60,12 +68,15 @@ jobs:
           wrk.body   = '{"sepal_length":5.1,"sepal_width":3.5,"petal_length":1.4,"petal_width":0.2}'
           wrk.headers["Content-Type"] = "application/json"
           LUA
-          echo "Load testing http://$EXTERNAL_IP/predict ..."
-          wrk -t4 -c400 -d60s -s post.lua http://$EXTERNAL_IP/predict
+          echo "🚀 Starting stress test for 60 seconds..."
+          wrk -t4 -c400 -d60s -s post.lua http://$EXTERNAL_IP/predict || echo "wrk finished with non-zero exit code"
 
-      # Show HPA status after the load
-      - name: HPA & Pods after load
+      - name: Show HPA and Pod Status After Load
         run: |
+          echo "📈 HPA status after load test:"
           kubectl get hpa
+          echo "🧩 Pods state after scaling:"
           kubectl get pods -o wide
-          kubectl top pods || true
+          echo "💾 Pod resource usage:"
+          kubectl top pods || echo "metrics unavailable"
+
