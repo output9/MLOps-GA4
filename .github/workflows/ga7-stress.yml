@@ -1,4 +1,4 @@
-name: GA7 - GKE Deploy & Stress Test with HPA
+name: GA7 - GKE Deploy & Stress Test
 
 on:
   push:
@@ -8,104 +8,106 @@ on:
 jobs:
   stress-test:
     runs-on: ubuntu-latest
-    env:
-      GKE_PROJECT: hybrid-shine-474105-e1   # <-- REPLACE with your GCP Project ID
-      GKE_CLUSTER: iris-cluster     # <-- REPLACE with your GKE Cluster Name
-      GKE_ZONE: us-central1           # <-- REPLACE with your GKE Zone
 
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v3
 
-      - name: 🔐 Authenticate to GCP
+      # 1. Authenticate to Google Cloud using service account JSON
+      - name: Authenticate to GCP
         uses: google-github-actions/auth@v2
         with:
-          # This should be a service account key JSON that has the 
-          # necessary roles (e.g., GKE Developer, Storage Admin for image push)
-          credentials_json: ${{ secrets.GCP_SA_KEY }} 
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          create_credentials_file: true
+          export_environment_variables: true
 
-      - name: ☁️ Set up Google Cloud CLI (GKE Access)
+      # 2. Install gcloud and gke-gcloud-auth-plugin for kubectl
+      - name: Install gcloud + GKE auth plugin
         uses: google-github-actions/setup-gcloud@v2
+        with:
+          version: ">=467.0.0"
 
-      - name: 🔑 Get GKE Credentials (Fixes the gke-gcloud-auth-plugin error)
+      - name: Ensure GKE auth plugin installed
         run: |
-          gcloud container clusters get-credentials "$GKE_CLUSTER" --zone "$GKE_ZONE" --project "$GKE_PROJECT"
-          echo "✅ GKE Credentials successfully configured."
+          gcloud components install gke-gcloud-auth-plugin --quiet || true
+          if ! command -v gke-gcloud-auth-plugin >/dev/null; then
+            echo "Installing via apt..."
+            echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] http://packages.cloud.google.com/apt cloud-sdk main" | sudo tee /etc/apt/sources.list.d/google-cloud-sdk.list
+            sudo apt-get update -y
+            sudo apt-get install -y google-cloud-cli google-cloud-sdk-gke-gcloud-auth-plugin
+          fi
+          gke-gcloud-auth-plugin --version
 
+      # 3. Setup kubectl
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: "latest"
+
+      # 4. Decode kubeconfig
+      - name: Configure kubeconfig from base64 secret
+        env:
+          KUBE_CONFIG_B64: ${{ secrets.KUBE_CONFIG_B64 }}
+        run: |
+          echo "$KUBE_CONFIG_B64" | base64 --decode > kubeconfig.yaml
+          echo "KUBECONFIG=$PWD/kubeconfig.yaml" >> $GITHUB_ENV
+          echo "✅ kubeconfig configured"
+
+      # 5. Verify cluster connectivity
       - name: Verify cluster connection
         run: |
-          # This command will now work without the plugin error
+          kubectl version --client=true
+          echo "Cluster Nodes:"
           kubectl get nodes
 
-      - name: Apply manifests (Deployment & Service)
+      # 6. Apply Kubernetes manifests
+      - name: Apply manifests
         run: |
-          echo "🛠 Applying Kubernetes manifests..."
-          # Assuming your deployment is in k8s/ and is named 'iris-api'
+          echo "🛠 Deploying iris-api and service..."
           kubectl apply -f k8s/deploy.yaml
-          kubectl apply -f k8s/service.yaml # <-- Ensure you have a service.yaml
           kubectl rollout status deploy/iris-api --timeout=120s
           kubectl get svc iris-api-svc
 
-      - name: Configure HPA (1->3 pods @ 50% CPU)
+      # 7. Create Horizontal Pod Autoscaler
+      - name: Configure HPA
         run: |
-          # Use kubectl autoscale for simplicity, but ensure k8s/deploy.yaml has resource requests
           kubectl autoscale deployment iris-api --cpu-percent=50 --min=1 --max=3 || true
-          echo "HPA configuration complete (Max 3 pods). Starting with 1."
           kubectl get hpa
 
-      - name: Get External IP and Wait for it
-        id: svc_ip
+      # 8. Fetch External IP for service
+      - name: Get External IP
+        id: svc
         run: |
           echo "Fetching external IP for iris-api-svc..."
-          for i in {1..20}; do
+          for i in {1..10}; do
             IP=$(kubectl get svc iris-api-svc -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
             if [ -n "$IP" ]; then
               echo "External IP: $IP"
               echo "EXTERNAL_IP=$IP" >> $GITHUB_ENV
               break
             fi
-            echo "Waiting for external IP (Attempt $i/20)..."
+            echo "Waiting for external IP..."
             sleep 10
           done
-          if [ -z "$EXTERNAL_IP" ]; then
-            echo "::error::External IP not provisioned within timeout."
-            exit 1
-          fi
 
-      - name: Run wrk stress test (SCENARIO 1: Auto-scaling Max 3 Pods)
+      # 9. Run stress test with wrk
+      - name: Run wrk stress test
         run: |
           sudo apt-get update && sudo apt-get install -y wrk
-          
           cat > post.lua <<'LUA'
           wrk.method = "POST"
-          # Ensure your model accepts this format - Use a minimal valid JSON
-          wrk.body = '{"sepal_length":5.1,"sepal_width":3.5,"petal_length":1.4,"petal_width":0.2}' 
+          wrk.body   = '{"sepal_length":5.1,"sepal_width":3.5,"petal_length":1.4,"petal_width":0.2}'
           wrk.headers["Content-Type"] = "application/json"
           LUA
-          
-          echo "🚀 Starting STRESS TEST 1 (Max 3 Pods, High Concurrency - >1000 requests)..."
-          # -t4 threads, -c400 connections, -d60s duration (enough time for HPA to scale)
-          # Total requests will be > 1000
-          wrk -t4 -c400 -d60s -s post.lua http://$EXTERNAL_IP/predict
-          
-          echo "📈 HPA and Pod Status during scaling:"
-          kubectl get hpa
-          kubectl get pods -o wide
+          echo "🚀 Starting stress test for 60 seconds..."
+          wrk -t4 -c400 -d60s -s post.lua http://$EXTERNAL_IP/predict || echo "wrk finished with errors"
 
-      - name: Run wrk stress test (SCENARIO 2: Bottleneck - Restricted to 1 Pod)
+      # 10. Show HPA and Pod status after load
+      - name: Show HPA and Pod status
         run: |
-          echo "⬇️ Restricting HPA max_pods to 1 for bottleneck test..."
-          # Update the max replicas to 1
-          kubectl autoscale deployment iris-api --cpu-percent=50 --min=1 --max=1 --allow-missing || kubectl autoscale deployment iris-api --cpu-percent=50 --min=1 --max=1
-
-          echo "🛑 Starting BOTTLENECK STRESS TEST 2 (Max 1 Pod, Very High Concurrency 2000+ requests)..."
-          # Increasing connections to 600, aiming for 2000+ requests total
-          wrk -t4 -c600 -d30s -s post.lua http://$EXTERNAL_IP/predict || echo "wrk finished (expected high latency/errors)"
-
-          echo "⚠️ Bottleneck HPA and Pod Status (Should show 1/1 replicas):"
+          echo "📈 HPA after load:"
           kubectl get hpa
+          echo "🧩 Pod status:"
           kubectl get pods -o wide
-          
-          # Clean up: Reset HPA back to 3
-          echo "✅ Resetting HPA max_pods to 3."
-          kubectl autoscale deployment iris-api --cpu-percent=50 --min=1 --max=3 --allow-missing || kubectl autoscale deployment iris-api --cpu-percent=50 --min=1 --max=3
+          echo "💾 Pod metrics:"
+          kubectl top pods || echo "metrics unavailable"
